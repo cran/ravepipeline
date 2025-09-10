@@ -13,7 +13,11 @@ pipeline_run <- function(
     progress_max = NA,
     progress_title = "Running pipeline",
     return_values = TRUE,
+    debug = FALSE,
     ...){
+  if(async) {
+    logger("Running a pipeline with `async=TRUE` is no logger recommended. Please consider using `start_job` instead.", level = "warning")
+  }
 
   pipe_dir <- activate_pipeline(pipe_dir)
 
@@ -35,6 +39,9 @@ pipeline_run <- function(
   } else if (type == "callr") {
     callr_function <- quote(callr::r)
   }
+  if(debug) {
+    message("pipeline_run: running with scheduler [", scheduler, "] and type [", type, "].")
+  }
 
   args <- list(
     names = names,
@@ -47,6 +54,7 @@ pipeline_run <- function(
   fun <- function(subprocess = TRUE){}
   environment(fun) <- new.env(parent = globalenv())
   body(fun) <- bquote({
+
     # this is running in another R session so load `ravepipeline`
     # without violating the CRAN policy
     ns <- asNamespace("ravepipeline")
@@ -84,6 +92,9 @@ pipeline_run <- function(
     shared_libs <- list.files(file.path(.(pipe_dir), "R"), pattern = "^shared-.*\\.R",
                               full.names = TRUE, ignore.case = TRUE)
     lapply(sort(shared_libs), function(f) {
+      if(.(debug)) {
+        message("pipeline_run: loading script: ", f)
+      }
       source(file = f, local = args$envir, chdir = TRUE)
       return()
     })
@@ -96,8 +107,24 @@ pipeline_run <- function(
     if(.(type) == "smart"){
       local <- ns$with_future_parallel
     }
+
+    if(.(debug)) {
+      message("pipeline_run: targeting names: ", deparse1(args$names), "...")
+    }
+
     make <- function(fun, use_local = TRUE) {
+
+      Sys.setenv("RAVE_PIPELINE_ACTIVE" = "true", "RAVE_WITH_PARALLEL" = "true")
+      on.exit({ Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL")) }, add = TRUE, after = FALSE)
+
       suppressWarnings({
+
+        # check if targets version is at least 1.11.1
+        if(isTRUE(utils::compareVersion(as.character(utils::packageVersion("targets")), "1.11.1") >= 0)) {
+          targets::tar_config_set(reporter_make = "terse", reporter_outdated = "terse")
+        } else {
+          targets::tar_config_unset(c("reporter_make", "reporter_outdated"))
+        }
 
         # Make sure the temporary folder exists
         tryCatch(
@@ -119,6 +146,7 @@ pipeline_run <- function(
             }
           },
           error = function( e ) {
+            Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL"))
             stop(ns$sanitize_target_error(e))
           }
         )
@@ -131,21 +159,32 @@ pipeline_run <- function(
           warning(msg, call. = FALSE)
         }
       }
+      Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL"))
+      return()
     }
 
     if("none" == .(scheduler)){
+      if(.(debug)) {
+        message("pipeline_run: using targets::tar_make")
+      }
       make( targets::tar_make )
     } else if("future" == .(scheduler)){
       args$workers <- ns$raveio_getopt("max_worker", default = 1L)
+      if(.(debug)) {
+        message("pipeline_run: using targets::tar_make_future")
+      }
       make( targets::tar_make_future )
       # local({ do.call(targets::tar_make_future, args) })
     } else {
-
       if(is.na(clustermq_scheduler)) {
         clustermq_scheduler <- "multiprocess"
       }
       old_opt <- options('clustermq.scheduler' = clustermq_scheduler)
       on.exit({ options(old_opt) }, add = TRUE)
+
+      if(.(debug)) {
+        message("pipeline_run: using targets::tar_make_clustermq with scheduler [", clustermq_scheduler, "]")
+      }
 
       if(identical(clustermq_scheduler, "LOCAL")){
         make( targets::tar_make_clustermq )
@@ -261,7 +300,7 @@ pipeline_run_bare <- function(
     type = c("smart", "callr", "vanilla"),
     envir = new.env(parent = globalenv()),
     callr_function = NULL,
-    names = NULL, return_values = TRUE,
+    names = NULL, return_values = TRUE, debug = FALSE,
     ...) {
   pipe_dir <- activate_pipeline(pipe_dir)
 
@@ -283,6 +322,9 @@ pipeline_run_bare <- function(
   } else if (type == "callr") {
     callr_function <- quote(callr::r)
   }
+  if(debug) {
+    message("pipeline_run_bare: running with scheduler [", scheduler, "] and type [", type, "].")
+  }
 
   all_names <- pipeline_target_names(pipe_dir = pipe_dir)
 
@@ -302,6 +344,10 @@ pipeline_run_bare <- function(
     local <- with_future_parallel
   }
 
+  if(debug) {
+    message("pipeline_run_bare: targeting names: ", deparse1(names), "...")
+  }
+
   args <- list(
     names = names,
     envir = envir,
@@ -314,6 +360,9 @@ pipeline_run_bare <- function(
   shared_libs <- list.files(file.path(pipe_dir, "R"), pattern = "^shared-.*\\.R",
                             full.names = TRUE, ignore.case = TRUE)
   lapply(sort(shared_libs), function(f) {
+    if(debug) {
+      message("pipeline_run_bare: loading script: ", f)
+    }
     source(file = f, local = args$envir, chdir = TRUE)
     return()
   })
@@ -326,8 +375,19 @@ pipeline_run_bare <- function(
 
   make <- function(fun, use_local = TRUE) {
     suppressWarnings({
+
+      Sys.setenv("RAVE_PIPELINE_ACTIVE" = "true", "RAVE_WITH_PARALLEL" = "true")
+      on.exit({ Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL")) }, add = TRUE, after = FALSE)
+
       tryCatch(
         expr = {
+
+          if(isTRUE(utils::compareVersion(as.character(utils::packageVersion("targets")), "1.11.1") >= 0)) {
+            targets::tar_config_set(reporter_make = "terse", reporter_outdated = "terse")
+          } else {
+            targets::tar_config_unset(c("reporter_make", "reporter_outdated"))
+          }
+
           targets::tar_destroy("process", ask = FALSE)
           if( use_local ) {
             local({ do.call(fun, args) })
@@ -345,6 +405,13 @@ pipeline_run_bare <- function(
           }
         },
         error = function( e ) {
+          Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL"))
+          # if(debug) {
+          #   g <- globalenv()
+          #   g$.last_rave_pipeline_error <- e
+          #   browser(condition = e)
+          #   message("pipeline_run_bare: error instance has been saved to  `.last_rave_pipeline_error`")
+          # }
           stop(sanitize_target_error(e))
         }
       )
@@ -356,15 +423,23 @@ pipeline_run_bare <- function(
         warning(msg, call. = FALSE)
       }
     }
+    Sys.unsetenv(c("RAVE_PIPELINE_ACTIVE", "RAVE_WITH_PARALLEL"))
+    return()
   }
 
   switch (
     scheduler,
     "none" = {
+      if(debug) {
+        message("pipeline_run_bare: using targets::tar_make")
+      }
       make( targets::tar_make )
     },
     "future" = {
       args$workers <- raveio_getopt("max_worker", default = 1L)
+      if(debug) {
+        message("pipeline_run_bare: running targets in parallel")
+      }
       make( targets::tar_make_future )
     },
     {
@@ -373,6 +448,10 @@ pipeline_run_bare <- function(
       }
       old_opt <- options('clustermq.scheduler' = clustermq_scheduler)
       on.exit({ options(old_opt) }, add = TRUE)
+
+      if(debug) {
+        message("pipeline_run_bare: running targets with clustermq scheduler: ", clustermq_scheduler)
+      }
 
       if(identical(clustermq_scheduler, "LOCAL")){
         make( targets::tar_make_clustermq )
@@ -390,7 +469,14 @@ pipeline_run_bare <- function(
     names <- pipeline_target_names(pipe_dir = pipe_dir)
   }
 
+  if(debug) {
+    message("pipeline_run_bare: done targets: ", deparse1(names))
+  }
+
   if( return_values ) {
+    if(debug) {
+      message("pipeline_run_bare: reading back targets...")
+    }
     return(pipeline_read(var_names = names, pipe_dir = pipe_dir))
   } else {
     return(invisible())

@@ -68,8 +68,10 @@ str_to_sentence <- function(x) {
 
 cat2 <- function (..., level = "DEBUG", print_level = FALSE, file = "",
           sep = " ", fill = FALSE, labels = NULL, append = FALSE, end = "\n",
-          pal = list(DEBUG = "grey60", INFO = "#1d9f34", WARNING = "#ec942c",
-                     ERROR = "#f02c2c", FATAL = "#763053", DEFAULT = "grey60"),
+          pal = list(
+            DEBUG = "#547783", INFO = "#0DCFDA",
+            SUCCESS = "green4", WARNING = "darkorange",
+            ERROR = "#EE2E00", FATAL = "#FF0000", DEFAULT = "gray50"),
           use_cli = TRUE, bullet = "auto")
 {
   if (!level %in% names(pal)) {
@@ -81,14 +83,20 @@ cat2 <- function (..., level = "DEBUG", print_level = FALSE, file = "",
   if (is.null(.col)) {
     .col <- "#000000"
   }
-  if (bullet == "auto") {
-    bullet <- bullet_list[[level]]
-    if (is.null(bullet)) {
-      bullet <- "arrow_right"
+  if(is.function(bullet)) {
+    bullet <- bullet()
+  } else if (length(bullet) == 1) {
+    if(bullet == "auto") {
+      bullet <- bullet_list[[level]]
+      if (is.null(bullet)) {
+        bullet <- "arrow_right"
+      }
     }
+  } else {
+    bullet <- NULL
   }
   if (interactive()) {
-    if (use_cli) {
+    if (use_cli && length(bullet) == 1) {
       cli::cat_bullet(..., col = .col, bullet = bullet)
     }
     else {
@@ -151,28 +159,30 @@ catgl <- function(..., .envir = parent.frame(), level = 'DEBUG', .pal, .capture 
   call <- deparse1(call, collapse = '\n')
 
   # .envir = parent.frame(), level = 'DEBUG', .pal, .capture = FALSE
-  if(package_installed('ravedash')){
+  # if(package_installed('ravedash')){
     ravedash_loglevel <- switch (
       level,
       "DEFAULT" = "trace",
       "DEBUG" = "debug",
       "INFO" = "info",
       "WARNING" = "warning",
+      "SUCCESS" = "success",
       'ERROR' = 'error',
       'FATAL' = 'fatal',
       { "trace" }
     )
-    call_pkg_fun("ravedash", "logger", msg, level = ravedash_loglevel)
+    logger(msg, level = ravedash_loglevel)
+    # call_pkg_fun("ravedash", "logger", msg, level = ravedash_loglevel)
     if(level == 'FATAL') {
       stop(msg)
     }
-  } else {
-    if(missing(.pal)){
-      cat2(msg, level = level)
-    }else{
-      cat2(msg, level = level, pal = .pal)
-    }
-  }
+  # } else {
+  #   if(missing(.pal)){
+  #     cat2(msg, level = level)
+  #   }else{
+  #     cat2(msg, level = level, pal = .pal)
+  #   }
+  # }
 
   return(invisible(msg))
 }
@@ -267,17 +277,6 @@ parse_svec <- function (text, sep = ",", connect = "-:|", sort = FALSE, unique =
 #   base64enc::base64encode(charToRaw(x))
 # }
 
-base64_urlencode <- function (x) {
-  if (!length(x)) {
-    return(character(x))
-  }
-  # re <- vapply(enc2utf8(as.character(x)), base64_urlinternal_encoder,
-  #              "", USE.NAMES = FALSE)
-  # re <- gsub("[=]{0,}$", "", re)
-  # re <- gsub("[+]", "-", re)
-  # gsub("/", "_", re)
-  unname(base64url::base64_urlencode(x = as.character(x)))
-}
 
 safe_urlencode <- function (x) {
   re <- base64_urlencode(x)
@@ -288,12 +287,6 @@ safe_urlencode <- function (x) {
 #   rawToChar(base64enc::base64decode(what = x), multiple = FALSE)
 # }
 
-base64_urldecode <- function (x) {
-  # x <- gsub("-", "+", x)
-  # x <- gsub("_", "/", x)
-  # vapply(x, base64_urlinternal_decoder, "", USE.NAMES = FALSE)
-  unname(base64url::base64_urldecode(x = x))
-}
 
 safe_urldecode <- function (x) {
   x <- gsub(x = as.character(x), pattern = "^==", replacement = "")

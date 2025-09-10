@@ -1,7 +1,9 @@
-#' Class definition for pipeline tools
+#' Class definition for 'RAVE' pipelines
 #' @seealso \code{\link{pipeline}}
+#' @export
 PipelineTools <- R6::R6Class(
   classname = "PipelineTools",
+  inherit = RAVESerializable,
   portable = TRUE,
   cloneable = TRUE,
 
@@ -16,6 +18,37 @@ PipelineTools <- R6::R6Class(
   ),
 
   public = list(
+
+    #' @description Create an atomic list that can be serialized
+    #' @param ... ignored
+    `@marshal` = function(...) {
+      list(
+        namespace = "ravepipeline",
+        r6_generator = "PipelineTools",
+        data = list(
+          pipeline_name = self$pipeline_name,
+          pipeline_path = self$pipeline_path,
+          settings_file = private$.settings_file
+        )
+      )
+    },
+
+    #' @description Restore an object from an atomic list
+    #' @param object a list from \code{'@marshal'}
+    #' @param ... ignored
+    `@unmarshal` = function(object, ...) {
+      stopifnot(identical(object$namespace, "ravepipeline"))
+      stopifnot(identical(object$r6_generator, "PipelineTools"))
+
+      # `ravepipeline` might not be loaded yet...
+      ravepipeline <- asNamespace("ravepipeline")
+      ravepipeline$PipelineTools$new(
+        pipeline_name = object$data$pipeline_name,
+        settings_file = object$data$settings_file,
+        paths = dirname(object$data$pipeline_path),
+        temporary = TRUE
+      )
+    },
 
     #' @description construction function
     #' @param pipeline_name name of the pipeline, usually in the pipeline
@@ -187,6 +220,25 @@ PipelineTools <- R6::R6Class(
     #' @param ... other parameters passing to \code{\link{pipeline_read}}
     #' @returns The values of the targets
     read = function(var_names, ifnotfound = NULL, ...) {
+
+      # Check targets, make sure the `tar_runtime$store` is not identical to "shared"
+      # targets ban users from read from pipeline when running, even from
+      # another pipeline project
+      # This is hack of course : )
+      targets <- asNamespace("targets")
+      tar_runtime <- targets$tar_runtime
+      current_store <- tar_runtime$store
+      needs_reset <- FALSE
+      if( identical(tar_runtime$store, "shared") ) {
+        needs_reset <- TRUE
+        tar_runtime$store <- '___'
+        on.exit({
+          if(!identical(tar_runtime$store, current_store)) {
+            tar_runtime$store <- current_store
+          }
+        }, add = TRUE, after = FALSE)
+      }
+
       if(missing(var_names)) {
         var_names <- pipeline_target_names(pipe_dir = private$.pipeline_path)
       } else {
@@ -198,8 +250,13 @@ PipelineTools <- R6::R6Class(
         }
       }
 
-      pipeline_read(var_names = var_names, pipe_dir = private$.pipeline_path,
-                    ifnotfound = ifnotfound, ...)
+      re <- pipeline_read(var_names = var_names, pipe_dir = private$.pipeline_path,
+                          ifnotfound = ifnotfound, ...)
+      if( needs_reset ) {
+        tar_runtime$store <- current_store
+      }
+
+      return(re)
 
     },
 
@@ -209,8 +266,8 @@ PipelineTools <- R6::R6Class(
     #' @param async whether to run asynchronous in another process
     #' @param as_promise whether to return a \code{\link{PipelineResult}}
     #' instance
-    #' @param scheduler,type,envir,callr_function,return_values,... passed to
-    #' \code{\link{pipeline_run}} if \code{as_promise} is true, otherwise
+    #' @param scheduler,type,envir,callr_function,return_values,debug,... passed
+    #' to \code{\link{pipeline_run}} if \code{as_promise} is true, otherwise
     #' these arguments will be passed to \code{pipeline_run_bare}
     #' @returns A \code{\link{PipelineResult}} instance if \code{as_promise}
     #' or \code{async} is true; otherwise a list of values for input \code{names}
@@ -219,6 +276,7 @@ PipelineTools <- R6::R6Class(
                    type = c("smart", "callr", "vanilla"),
                    envir = new.env(parent = globalenv()),
                    callr_function = NULL, return_values = TRUE,
+                   debug = FALSE,
                    ...) {
       if(!as_promise && async) {
         stop("If you run the pipeline asynchronous, then the result must be a `promise` object")
@@ -246,7 +304,7 @@ PipelineTools <- R6::R6Class(
       expr <- bquote(pipeline_run_bare(
         pipe_dir = .(private$.pipeline_path), scheduler = .(scheduler),
         type = .(type), envir = envir, callr_function = .(callr_function),
-        names = .(names), return_values = .(return_values), ...))
+        names = .(names), return_values = .(return_values), debug = .(debug), ...))
 
       if( as_promise ) {
         expr[[1]] <- quote(pipeline_run)
@@ -413,6 +471,9 @@ PipelineTools <- R6::R6Class(
       env$pipeline_get <- self$get_settings
       env$pipeline_settings_path <- self$settings_path
       env$pipeline_path <- private$.pipeline_path
+      list2env(as.list(self$get_settings()), envir = env)
+      shared_env <- self$shared_env()
+      list2env(as.list(shared_env), envir = env)
     },
 
     #' @description visualize pipeline target dependency graph
@@ -484,7 +545,9 @@ PipelineTools <- R6::R6Class(
     #' @returns A new pipeline object based on the path given
     fork_to_subject = function(subject, label = "NA", policy = "default",
                                delete_old = FALSE, sanitize = TRUE) {
-      subject <- restore_subject_instance(subject, strict = TRUE)
+      # subject <- restore_subject_instance(subject, strict = TRUE)
+      subject <- call_ravecore_fun(f_name = "as_rave_subject", subject, strict = TRUE)
+
       label <- paste(label, collapse = "")
       label_cleaned <- gsub("[^a-zA-Z0-9_.-]+", "_", label)
 
@@ -493,7 +556,7 @@ PipelineTools <- R6::R6Class(
         "%s-%s-%s",
         self$pipeline_name,
         label_cleaned,
-        format(timestamp, "%Y%m%dT%H%M%S")
+        format(timestamp, "%y%m%dT%H%M%S")
       )
       path <- file.path(
         subject$pipeline_path,
@@ -724,6 +787,38 @@ PipelineTools <- R6::R6Class(
     has_preferences = function(keys, ...) {
       pipeline_has_preferences(keys = keys, ...,
                                .preference_instance = private$.preferences)
+    },
+
+    #' @description generate pipeline
+    #' @param name report name, see field \code{'available_reports'}
+    #' @param subject subject helps determine the \code{output_dir} and
+    #' working directories
+    #' @param output_dir parent folder where output will be stored
+    #' @param output_format output format
+    #' @param clean whether to clean the output; default is false
+    #' @param ... passed to \code{'rmarkdown'} render function
+    #' @returns A job identification number, see \code{\link{resolve_job}} for
+    #' querying job details
+    generate_report = function(
+      name, subject = NULL, output_dir = NULL, output_format = "auto",
+      clean = FALSE, ...) {
+
+      report_attributes <- list()
+      if(!is.null(subject)) {
+        if(length(output_dir) != 1 || is.na(output_dir) || !nzchar(trimws(output_dir))) {
+          output_dir <- subject$report_path
+        }
+        report_attributes$project_name <- subject$project_name
+        report_attributes$subject_code <- subject$subject_code
+      }
+      # 127.0.0.1:17283/?type=widget&project_name=test&subject_code=DemoSubject&report_name=report-diagnostics_datetime-250811T165425_notch_filter&module=standalone_report&shared_id=kJKCof6lYRNqaFRst6Yr5Je6xp
+
+
+      pipeline_report_generate(
+        name = name, output_dir = output_dir,
+        output_format = output_format, clean = clean,
+        ..., attributes = report_attributes,
+        pipe_dir = private$.pipeline_path)
     }
 
   ),
@@ -783,6 +878,17 @@ PipelineTools <- R6::R6Class(
     #' @field pipeline_name the code name of the pipeline
     pipeline_name = function() {
       private$.pipeline_name
+    },
+
+    #' @field available_reports available reports and their configurations
+    available_reports = function() {
+      reports <- as.list(pipeline_report_list(private$.pipeline_path))
+      report_configurations <- reports$report_configurations
+      re <- lapply(report_configurations, function(config) {
+        name <- config$name
+        structure(list(config), names = name)
+      })
+      unlist(re, recursive = FALSE, use.names = TRUE)
     }
 
   )
@@ -923,4 +1029,81 @@ pipeline_from_path <- function(path, settings_file = "settings.yaml") {
   eval(expr, envir = parent.frame())
 }
 
+#' @export
+format.PipelineTools <- function(x, ...) {
 
+  has_python <- x$python_module(type = "exist")
+
+  citation_str <- NULL
+  if(length(x$description$Citations)) {
+    citation_str <- paste(format(x$description$Citations, bibtex = FALSE), collapse = "\n")
+    citation_str <- c("", trimws(citation_str))
+  }
+
+  target_table <- x$target_table
+  input_settings <- x$get_settings()
+  input_names <- names(input_settings)
+
+  all_targets <- x$with_activated({
+    load_target("make-main.R")
+  })
+  target_names <- vapply(all_targets, get_target_name, "")
+
+  types <- vapply(target_table$Names, function(nm) {
+    switch(
+      nm,
+      "settings_path" = "[internal file]",
+      "settings" = "[internal list]",
+      {
+        if(nm %in% input_names) {
+          v <- input_settings[[nm]]
+          s <- utils::capture.output({
+            utils::str(
+              v,
+              max.level = 0L,
+              nchar.max = 45,
+              give.attr = FALSE,
+              drop.deparse.attr = TRUE,
+              give.head = FALSE,
+              indent.str = "",
+              comp.str = "",
+              no.list = FALSE
+            )
+          })
+          s <- paste(s, collapse = "")
+          if(is.list(v)) {
+            s <- sprintf("<%s>", s)
+          }
+          s
+        } else {
+          deps <- get_target_deps(all_targets[[which(target_names == nm)[[1]]]])
+          sprintf("[dependency: %4d]", length(deps))
+        }
+      }
+    )
+  }, "")
+
+  target_table <- data.frame(
+    Target = target_table$Names,
+    Snapshot = types,
+    Description = target_table$Description
+  )
+
+
+  tbl_str <- utils::capture.output({
+    print(target_table, row.names = FALSE)
+    invisible()
+  })
+
+  str <- c(
+    sprintf("Pipeline <%s>", x$pipeline_name),
+    sprintf("  Title : %s", x$description$Title),
+    sprintf("  Path  : %s", x$pipeline_path),
+    sprintf("  Python: %s", ifelse(has_python, "yes", "no")),
+    citation_str,
+    "",
+    "Runnable target table:",
+    sprintf("  %s", tbl_str)
+  )
+  paste(str, collapse = "\n")
+}

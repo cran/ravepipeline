@@ -8,6 +8,8 @@
 \alias{\%...T>\%}
 \alias{\%...!\%}
 \alias{\%...T!\%}
+\alias{as.promise}
+\alias{digest}
 \title{Objects exported from other packages}
 \keyword{internal}
 \description{
@@ -15,8 +17,10 @@ These objects are imported from other packages. Follow the links
 below to see their documentation.
 
 \describe{
+  \item{digest}{\code{\link[digest]{digest}}}
+
   \item{glue}{\code{\link[glue]{glue}}}
 
-  \item{promises}{\code{\link[promises:pipes]{\%...!\%}}, \code{\link[promises:pipes]{\%...>\%}}, \code{\link[promises:pipes]{\%...T!\%}}, \code{\link[promises:pipes]{\%...T>\%}}}
+  \item{promises}{\code{\link[promises:pipes]{\%...!\%}}, \code{\link[promises:pipes]{\%...>\%}}, \code{\link[promises:pipes]{\%...T!\%}}, \code{\link[promises:pipes]{\%...T>\%}}, \code{\link[promises:is.promise]{as.promise}}}
 }}
 

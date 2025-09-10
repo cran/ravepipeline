@@ -46,9 +46,11 @@ resolve_pipeline_error <- function(name, condition, expr = NULL) {
     }
   }
 
-  entrace <- get0("entrace", envir = asNamespace("dipsaus"),
-                  mode = "function", ifnotfound = stop, inherits = TRUE)
-  entrace(condition)
+  # rlang is used by targets so will be available
+  # in case it's not, condition will not be resolved
+  # rlang::entrace(condition)
+  call_pkg_fun(package = "rlang", f_name = "entrace", condition, .if_missing = "none")
+
   # condition <- rlang::cnd_entrace(condition)
   # rlang::cnd_signal(condition)
 
@@ -530,7 +532,7 @@ def rave_unserialize(x, path, name):
           targets::tar_target_raw(
             "settings",
             quote({
-              read_yaml(settings_path)
+              yaml::read_yaml(settings_path)
             }),
             deps = "settings_path",
             cue = targets::tar_cue("always")

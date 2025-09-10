@@ -5,6 +5,8 @@
 #' @importFrom promises %...T!%
 #' @importFrom glue glue
 #' @importFrom R6 R6Class
+#' @importFrom R6 is.R6
+#' @importFrom R6 is.R6Class
 #' @importFrom digest digest
 #' @importFrom remotes install_deps
 NULL
@@ -23,6 +25,12 @@ promises::`%...!%`
 
 #' @export
 promises::`%...T!%`
+
+#' @export
+promises::as.promise
+
+#' @export
+digest::digest
 
 
 #' @name ravepipeline-constants
@@ -100,7 +108,7 @@ ravepipeline_finalize_installation <- function(
   oldopt <- options("ravepipelines.install.yes_to_all" = TRUE)
   on.exit({
     options(oldopt)
-  })
+  }, add = TRUE, after = TRUE)
 
 
 
